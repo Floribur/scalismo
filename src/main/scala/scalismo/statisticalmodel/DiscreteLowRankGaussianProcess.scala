@@ -16,16 +16,18 @@
 package scalismo.statisticalmodel
 
 import breeze.linalg.svd.SVD
-import breeze.linalg.{diag, DenseMatrix, DenseVector}
+import breeze.linalg.{diag, norm, sum, Axis, DenseMatrix, DenseVector}
 import breeze.stats.distributions.Gaussian
 import scalismo.common.DiscreteField.vectorize
-import scalismo.common._
+import scalismo.common.*
 import scalismo.common.interpolation.{FieldInterpolator, NearestNeighborInterpolator}
-import scalismo.geometry._
+import scalismo.geometry.*
 import scalismo.image.StructuredPoints
 import scalismo.kernels.{DiscreteMatrixValuedPDKernel, MatrixValuedPDKernel}
+import scalismo.mesh.TriangleMesh
+import scalismo.numerics.PivotedCholesky.RelativeTolerance
 import scalismo.numerics.{PivotedCholesky, Sampler}
-import scalismo.statisticalmodel.DiscreteLowRankGaussianProcess.{Eigenpair => DiscreteEigenpair, _}
+import scalismo.statisticalmodel.DiscreteLowRankGaussianProcess.{Eigenpair as DiscreteEigenpair, *}
 import scalismo.statisticalmodel.LowRankGaussianProcess.Eigenpair
 import scalismo.statisticalmodel.NaNStrategy.NanIsNumericValue
 import scalismo.statisticalmodel.dataset.DataCollection
@@ -597,6 +599,59 @@ object DiscreteLowRankGaussianProcess {
     }
 
     DiscreteMatrixValuedPDKernel(domain, cov, outputDim)
+  }
+
+  def recenter[D: NDSpace, DDomain[D] <: DiscreteDomain[D], Value](
+    gp: DiscreteLowRankGaussianProcess[D, DDomain, Value],
+    data: IndexedSeq[PointId]
+  )(implicit vectorizer: Vectorizer[Value]): DiscreteLowRankGaussianProcess[D, DDomain, Value] = {
+
+    val dimension = gp.outputDim
+
+    // Calculate mean of centering set
+    val centeredIndices = data.map(_.id * dimension)
+
+    // Calculate adjustment vectors
+    val vectors = (0 until dimension).map(i =>
+      val sumMatrix =
+        DenseMatrix.tabulate(centeredIndices.length, gp.rank)((x, y) => gp.basisMatrix(centeredIndices(x) + i, y))
+      sum(sumMatrix, Axis._0) * (1.0 / centeredIndices.length)
+    )
+
+    // Adjust existing eigenfunctions
+    val adjustedEigenfunctions = {
+      val base = gp.basisMatrix.copy
+      val vectorMatrices = vectors.map(_.t.toDenseMatrix)
+      val translation = DenseMatrix.vertcat(vectorMatrices: _*)
+      (0 until base.rows by dimension).foreach(i => base(i until i + dimension, ::) :-= translation)
+      base
+    }
+
+    // TODO if desired filter for funcs too small -> replace with (0.0, normalized translation as eigfunction or original one or truncate)
+    // calculate eigenfunction norms
+    val eigenfunctionNorms = norm(adjustedEigenfunctions, Axis._0).t
+
+    // Normalize eigenfunctions in place
+    (0 until gp.rank).map { i =>
+      adjustedEigenfunctions(::, i) :/= eigenfunctionNorms(i)
+    }
+
+    // Update eigenvalues to reflect normalized eigenfunctions
+    val eigenvaluesCorrected = gp.variance *:* eigenfunctionNorms *:* eigenfunctionNorms
+
+    // TODO: Rediagonalization for more than sampling - gram better
+    // val resultModel = PointDistributionModel(gp.domain, gp.meanVector, eigenvaluesCorrected, adjustedEigenfunctions)
+    val temporaryGP: DiscreteLowRankGaussianProcess[D, DDomain, Value] =
+      new DiscreteLowRankGaussianProcess(gp.domain, gp.meanVector, eigenvaluesCorrected, adjustedEigenfunctions)
+
+    val approximateEig = PivotedCholesky.computeApproximateEig(
+      temporaryGP.interpolate(NearestNeighborInterpolator()).cov,
+      temporaryGP.domain.pointSet.points.toIndexedSeq,
+      RelativeTolerance(0.0001)
+    )
+
+    new DiscreteLowRankGaussianProcess(gp.domain, gp.meanVector, approximateEig._2, approximateEig._1)
+
   }
 
 }
