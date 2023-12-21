@@ -601,6 +601,25 @@ object DiscreteLowRankGaussianProcess {
     DiscreteMatrixValuedPDKernel(domain, cov, outputDim)
   }
 
+  /**
+   * Realigns the gaussian process to the given data. This is achieved by recentering the eigenfunctions of the gaussian
+   * process to the given data.
+   *
+   * @param gp
+   *   The gaussian process to realign
+   * @param data
+   *   The data to which the gaussian process should be realigned
+   * @param vectorizer
+   *   The vectorizer used to vectorize the data
+   * @tparam D
+   *   The dimensionality of the domain
+   * @tparam DDomain
+   *   The type of the domain
+   * @tparam Value
+   *   The type of the values
+   * @return
+   *   A new gaussian process, which is realigned to the given data
+   */
   def recenter[D: NDSpace, DDomain[D] <: DiscreteDomain[D], Value](
     gp: DiscreteLowRankGaussianProcess[D, DDomain, Value],
     data: IndexedSeq[PointId]
@@ -721,4 +740,5 @@ object DiscreteLowRankGraussianProcess3D {
   )(implicit vectorizer: Vectorizer[Value]): DiscreteLowRankGaussianProcess[_3D, DDomain, Value] = {
     DiscreteLowRankGaussianProcess.apply[_3D, DDomain, Value](mean, klBasis)
   }
+
 }
