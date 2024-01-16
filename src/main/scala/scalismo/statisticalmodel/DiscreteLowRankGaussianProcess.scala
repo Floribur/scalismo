@@ -631,11 +631,11 @@ object DiscreteLowRankGaussianProcess {
     val centeredIndices = data.map(_.id * dimension)
 
     // Calculate adjustment vectors
-    val vectors = (0 until dimension).map(i =>
+    val vectors = (0 until dimension).map(i => {
       val sumMatrix =
         DenseMatrix.tabulate(centeredIndices.length, gp.rank)((x, y) => gp.basisMatrix(centeredIndices(x) + i, y))
       sum(sumMatrix, Axis._0) * (1.0 / centeredIndices.length)
-    )
+    })
 
     // Adjust existing eigenfunctions
     val adjustedEigenfunctions = {
@@ -663,13 +663,14 @@ object DiscreteLowRankGaussianProcess {
     val temporaryGP: DiscreteLowRankGaussianProcess[D, DDomain, Value] =
       new DiscreteLowRankGaussianProcess(gp.domain, gp.meanVector, eigenvaluesCorrected, adjustedEigenfunctions)
 
-    val approximateEig = PivotedCholesky.computeApproximateEig(
+    temporaryGP
+    /*val approximateEig = PivotedCholesky.computeApproximateEig(
       temporaryGP.interpolate(NearestNeighborInterpolator()).cov,
       temporaryGP.domain.pointSet.points.toIndexedSeq,
       RelativeTolerance(0.0001)
     )
 
-    new DiscreteLowRankGaussianProcess(gp.domain, gp.meanVector, approximateEig._2, approximateEig._1)
+    new DiscreteLowRankGaussianProcess(gp.domain, gp.meanVector, approximateEig._2, approximateEig._1)*/
 
   }
 
