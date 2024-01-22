@@ -25,7 +25,7 @@ import scalismo.geometry.*
 import scalismo.image.StructuredPoints
 import scalismo.kernels.{DiscreteMatrixValuedPDKernel, MatrixValuedPDKernel}
 import scalismo.mesh.TriangleMesh
-import scalismo.numerics.PivotedCholesky.RelativeTolerance
+import scalismo.numerics.PivotedCholesky.{NumberOfEigenfunctions, RelativeTolerance}
 import scalismo.numerics.{PivotedCholesky, Sampler}
 import scalismo.statisticalmodel.DiscreteLowRankGaussianProcess.{Eigenpair as DiscreteEigenpair, *}
 import scalismo.statisticalmodel.LowRankGaussianProcess.Eigenpair
@@ -668,7 +668,7 @@ object DiscreteLowRankGaussianProcess {
       val approximateEig = PivotedCholesky.computeApproximateEig(
         temporaryGP.interpolate(NearestNeighborInterpolator()).cov,
         temporaryGP.domain.pointSet.points.toIndexedSeq,
-        RelativeTolerance(1e-6)
+        NumberOfEigenfunctions(temporaryGP.rank) //
       )
       temporaryGP = new DiscreteLowRankGaussianProcess(gp.domain, gp.meanVector, approximateEig._2, approximateEig._1)
     }
