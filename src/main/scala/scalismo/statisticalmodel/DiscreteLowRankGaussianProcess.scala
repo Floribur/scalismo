@@ -622,7 +622,8 @@ object DiscreteLowRankGaussianProcess {
    */
   def recenter[D: NDSpace, DDomain[D] <: DiscreteDomain[D], Value](
     gp: DiscreteLowRankGaussianProcess[D, DDomain, Value],
-    data: IndexedSeq[PointId]
+    data: IndexedSeq[PointId],
+    rediagnolization: Boolean = true
   )(implicit vectorizer: Vectorizer[Value]): DiscreteLowRankGaussianProcess[D, DDomain, Value] = {
 
     val dimension = gp.outputDim
@@ -660,17 +661,19 @@ object DiscreteLowRankGaussianProcess {
 
     // TODO: Rediagonalization for more than sampling - gram better
     // val resultModel = PointDistributionModel(gp.domain, gp.meanVector, eigenvaluesCorrected, adjustedEigenfunctions)
-    val temporaryGP: DiscreteLowRankGaussianProcess[D, DDomain, Value] =
+    var temporaryGP: DiscreteLowRankGaussianProcess[D, DDomain, Value] =
       new DiscreteLowRankGaussianProcess(gp.domain, gp.meanVector, eigenvaluesCorrected, adjustedEigenfunctions)
 
-    temporaryGP
-    /*val approximateEig = PivotedCholesky.computeApproximateEig(
-      temporaryGP.interpolate(NearestNeighborInterpolator()).cov,
-      temporaryGP.domain.pointSet.points.toIndexedSeq,
-      RelativeTolerance(0.0001)
-    )
+    if (rediagnolization) {
+      val approximateEig = PivotedCholesky.computeApproximateEig(
+        temporaryGP.interpolate(NearestNeighborInterpolator()).cov,
+        temporaryGP.domain.pointSet.points.toIndexedSeq,
+        RelativeTolerance(1e-6)
+      )
+      temporaryGP = new DiscreteLowRankGaussianProcess(gp.domain, gp.meanVector, approximateEig._2, approximateEig._1)
+    }
 
-    new DiscreteLowRankGaussianProcess(gp.domain, gp.meanVector, approximateEig._2, approximateEig._1)*/
+    temporaryGP
 
   }
 
