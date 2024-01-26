@@ -35,6 +35,7 @@ import scalismo.utils.{Memoize, Random}
 
 import scala.language.higherKinds
 import scala.collection.parallel.immutable.ParVector
+import breeze.linalg._
 
 /**
  * Represents a low-rank gaussian process, that is only defined at a finite, discrete set of points. It supports the
@@ -659,22 +660,38 @@ object DiscreteLowRankGaussianProcess {
     // Update eigenvalues to reflect normalized eigenfunctions
     val eigenvaluesCorrected = gp.variance *:* eigenfunctionNorms *:* eigenfunctionNorms
 
-    // TODO: Rediagonalization for more than sampling - gram better
-    // val resultModel = PointDistributionModel(gp.domain, gp.meanVector, eigenvaluesCorrected, adjustedEigenfunctions)
-    var temporaryGP: DiscreteLowRankGaussianProcess[D, DDomain, Value] =
-      new DiscreteLowRankGaussianProcess(gp.domain, gp.meanVector, eigenvaluesCorrected, adjustedEigenfunctions)
-
-    if (rediagnolization) {
-      val approximateEig = PivotedCholesky.computeApproximateEig(
-        temporaryGP.interpolate(NearestNeighborInterpolator()).cov,
-        temporaryGP.domain.pointSet.points.toIndexedSeq,
-        NumberOfEigenfunctions(temporaryGP.rank) //
-      )
-      temporaryGP = new DiscreteLowRankGaussianProcess(gp.domain, gp.meanVector, approximateEig._2, approximateEig._1)
+    // Rediagonalize the Gram matrix if
+    val (newBasisMatrix, newVariance) = {
+      if (rediagnolization) rediagonalizeGram(basis = adjustedEigenfunctions, s = eigenvaluesCorrected)
+      else (adjustedEigenfunctions, eigenvaluesCorrected)
     }
 
-    temporaryGP
+    val newGP: DiscreteLowRankGaussianProcess[D, DDomain, Value] =
+      new DiscreteLowRankGaussianProcess(_domain = gp.domain,
+                                         meanVector = gp.meanVector,
+                                         variance = newVariance,
+                                         basisMatrix = newBasisMatrix
+      )
 
+    newGP
+
+  }
+
+  /**
+   * assumes the basis nxr is non orthogonal, s is the variance (squared [eigen]scalars) of that basis. returns a
+   * orthonormal basis with the adjusted variance. assumes no zero variance values
+   */
+  private def rediagonalizeGram(basis: DenseMatrix[Double],
+                                s: DenseVector[Double]
+  ): (DenseMatrix[Double], DenseVector[Double]) = {
+    val l = basis * breeze.linalg.diag(breeze.numerics.sqrt(s)) // basis(*, ::) * breeze.numerics.sqrt(s)
+    val gram = l.t * l
+    val svd = breeze.linalg.svd(gram)
+    val newBasis =
+      l * svd.U * breeze.linalg.diag(
+        1.0 / breeze.numerics.sqrt(svd.S)
+      ) // l * (svd.U(*, ::) * (1.0 / breeze.numerics.sqrt(svd.S)))
+    (newBasis, svd.S)
   }
 
 }
