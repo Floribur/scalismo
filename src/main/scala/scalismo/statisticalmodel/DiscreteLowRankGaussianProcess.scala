@@ -627,10 +627,21 @@ object DiscreteLowRankGaussianProcess {
     rediagnolization: Boolean = true
   )(implicit vectorizer: Vectorizer[Value]): DiscreteLowRankGaussianProcess[D, DDomain, Value] = {
 
+    require(gp.rank > 0, "The rank of the gaussian process can not be zero")
+    require(gp.basisMatrix.rows > 0, "The number of rows of the basis matrix must be greater than 0")
+    require(gp.basisMatrix.cols > 0, "The number of columns of the basis matrix must be greater than 0")
+    require(gp.rank == gp.basisMatrix.cols,
+            "The rank of the gaussian process must be equal to the number of columns of the basis matrix."
+    )
+    require(data.nonEmpty, "The data must contain at least one point")
+
     val dimension = gp.outputDim
 
     // Calculate mean of centering set
     val centeredIndices = data.map(_.id * dimension)
+
+    assert(centeredIndices.nonEmpty, "Centering set must contain at least one point")
+    assert(centeredIndices.forall(i => i >= 0 && i < gp.basisMatrix.rows), "Centering set contains invalid indices.")
 
     // Calculate adjustment vectors
     val vectors = (0 until dimension).map(i => {
