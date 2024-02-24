@@ -608,7 +608,7 @@ object DiscreteLowRankGaussianProcess {
    *
    * @param gp
    *   The gaussian process to realign
-   * @param data
+   * @param pointIds
    *   The data to which the gaussian process should be realigned
    * @param vectorizer
    *   The vectorizer used to vectorize the data
@@ -623,9 +623,15 @@ object DiscreteLowRankGaussianProcess {
    */
   def recenter[D: NDSpace, DDomain[D] <: DiscreteDomain[D], Value](
     gp: DiscreteLowRankGaussianProcess[D, DDomain, Value],
-    data: IndexedSeq[PointId],
+    pointIds: IndexedSeq[PointId],
     rediagnolization: Boolean = true
   )(implicit vectorizer: Vectorizer[Value]): DiscreteLowRankGaussianProcess[D, DDomain, Value] = {
+
+    val domainPointIds = gp.domain.pointSet.pointIds.toIndexedSeq
+    assert(
+      pointIds.forall(pointID => domainPointIds.contains(pointID)),
+      "All pointIDs must be contained in the reference mesh of the model."
+    )
 
     require(gp.rank > 0, "The rank of the gaussian process can not be zero")
     require(gp.basisMatrix.rows > 0, "The number of rows of the basis matrix must be greater than 0")
@@ -633,12 +639,12 @@ object DiscreteLowRankGaussianProcess {
     require(gp.rank == gp.basisMatrix.cols,
             "The rank of the gaussian process must be equal to the number of columns of the basis matrix."
     )
-    require(data.nonEmpty, "The data must contain at least one point")
+    require(pointIds.nonEmpty, "The points must contain at least one point")
 
     val dimension = gp.outputDim
 
     // Calculate mean of centering set
-    val centeredIndices = data.map(_.id * dimension)
+    val centeredIndices = pointIds.map(_.id * dimension)
 
     assert(centeredIndices.nonEmpty, "Centering set must contain at least one point")
     assert(centeredIndices.forall(i => i >= 0 && i < gp.basisMatrix.rows), "Centering set contains invalid indices.")
