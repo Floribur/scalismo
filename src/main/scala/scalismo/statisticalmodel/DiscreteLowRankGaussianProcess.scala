@@ -16,23 +16,28 @@
 package scalismo.statisticalmodel
 
 import breeze.linalg.svd.SVD
-import breeze.linalg.{diag, DenseMatrix, DenseVector}
+import breeze.linalg.{diag, norm, DenseMatrix, DenseVector}
 import breeze.stats.distributions.Gaussian
 import scalismo.common.DiscreteField.vectorize
-import scalismo.common._
+import scalismo.common.*
 import scalismo.common.interpolation.{FieldInterpolator, NearestNeighborInterpolator}
-import scalismo.geometry._
+import scalismo.geometry.*
 import scalismo.image.StructuredPoints
 import scalismo.kernels.{DiscreteMatrixValuedPDKernel, MatrixValuedPDKernel}
 import scalismo.numerics.{PivotedCholesky, Sampler}
-import scalismo.statisticalmodel.DiscreteLowRankGaussianProcess.{Eigenpair => DiscreteEigenpair, _}
+import scalismo.statisticalmodel.DiscreteLowRankGaussianProcess.{Eigenpair as DiscreteEigenpair, *}
 import scalismo.statisticalmodel.LowRankGaussianProcess.Eigenpair
 import scalismo.statisticalmodel.NaNStrategy.NanIsNumericValue
 import scalismo.statisticalmodel.dataset.DataCollection
 import scalismo.utils.{Memoize, Random}
 
+import breeze.linalg.svd.SVD
+import breeze.linalg.{diag, norm, sum, Axis, DenseMatrix, DenseVector}
+import breeze.stats.distributions.Gaussian
+
 import scala.language.higherKinds
 import scala.collection.parallel.immutable.ParVector
+import breeze.linalg._
 
 /**
  * Represents a low-rank gaussian process, that is only defined at a finite, discrete set of points. It supports the
@@ -636,6 +641,115 @@ object DiscreteLowRankGaussianProcess {
     }
 
     DiscreteMatrixValuedPDKernel(domain, cov, outputDim)
+  }
+
+  /**
+   * Realigns the gaussian process to the given data. This is achieved by recentering the eigenfunctions of the gaussian
+   * process to the given data.
+   *
+   * @param gp
+   *   The gaussian process to realign
+   * @param pointIds
+   *   The data to which the gaussian process should be realigned
+   * @param vectorizer
+   *   The vectorizer used to vectorize the data
+   * @tparam D
+   *   The dimensionality of the domain
+   * @tparam DDomain
+   *   The type of the domain
+   * @tparam Value
+   *   The type of the values
+   * @return
+   *   A new gaussian process, which is realigned to the given data
+   */
+  def recenter[D: NDSpace, DDomain[D] <: DiscreteDomain[D], Value](
+    gp: DiscreteLowRankGaussianProcess[D, DDomain, Value],
+    pointIds: IndexedSeq[PointId],
+    rediagnolization: Boolean = true
+  )(implicit vectorizer: Vectorizer[Value]): DiscreteLowRankGaussianProcess[D, DDomain, Value] = {
+
+    val domainPointIds = gp.domain.pointSet.pointIds.toIndexedSeq
+    assert(
+      pointIds.forall(pointID => domainPointIds.contains(pointID)),
+      "All pointIDs must be contained in the reference mesh of the model."
+    )
+
+    require(gp.rank > 0, "The rank of the gaussian process can not be zero")
+    require(gp.basisMatrix.rows > 0, "The number of rows of the basis matrix must be greater than 0")
+    require(gp.basisMatrix.cols > 0, "The number of columns of the basis matrix must be greater than 0")
+    require(gp.rank == gp.basisMatrix.cols,
+            "The rank of the gaussian process must be equal to the number of columns of the basis matrix."
+    )
+    require(pointIds.nonEmpty, "The points must contain at least one point")
+
+    val dimension = gp.outputDim
+
+    // Calculate mean of centering set
+    val centeredIndices = pointIds.map(_.id * dimension)
+
+    assert(centeredIndices.nonEmpty, "Centering set must contain at least one point")
+    assert(centeredIndices.forall(i => i >= 0 && i < gp.basisMatrix.rows), "Centering set contains invalid indices.")
+
+    // Calculate adjustment vectors
+    val vectors = (0 until dimension).map(i => {
+      val sumMatrix =
+        DenseMatrix.tabulate(centeredIndices.length, gp.rank)((x, y) => gp.basisMatrix(centeredIndices(x) + i, y))
+      sum(sumMatrix, Axis._0) * (1.0 / centeredIndices.length)
+    })
+
+    // Adjust existing eigenfunctions
+    val adjustedEigenfunctions = {
+      val base = gp.basisMatrix.copy
+      val vectorMatrices = vectors.map(_.t.toDenseMatrix)
+      val translation = DenseMatrix.vertcat(vectorMatrices: _*)
+      (0 until base.rows by dimension).foreach(i => base(i until i + dimension, ::) :-= translation)
+      base
+    }
+
+    // TODO if desired filter for funcs too small -> replace with (0.0, normalized translation as eigfunction or original one or truncate)
+    // calculate eigenfunction norms
+    val eigenfunctionNorms = norm(adjustedEigenfunctions, Axis._0).t
+
+    // Normalize eigenfunctions in place
+    (0 until gp.rank).map { i =>
+      adjustedEigenfunctions(::, i) :/= eigenfunctionNorms(i)
+    }
+
+    // Update eigenvalues to reflect normalized eigenfunctions
+    val eigenvaluesCorrected = gp.variance *:* eigenfunctionNorms *:* eigenfunctionNorms
+
+    // Rediagonalize the Gram matrix if
+    val (newBasisMatrix, newVariance) = {
+      if (rediagnolization) rediagonalizeGram(basis = adjustedEigenfunctions, s = eigenvaluesCorrected)
+      else (adjustedEigenfunctions, eigenvaluesCorrected)
+    }
+
+    val newGP: DiscreteLowRankGaussianProcess[D, DDomain, Value] =
+      new DiscreteLowRankGaussianProcess(_domain = gp.domain,
+                                         meanVector = gp.meanVector,
+                                         variance = newVariance,
+                                         basisMatrix = newBasisMatrix
+      )
+
+    newGP
+
+  }
+
+  /**
+   * assumes the basis nxr is non orthogonal, s is the variance (squared [eigen]scalars) of that basis. returns a
+   * orthonormal basis with the adjusted variance. assumes no zero variance values
+   */
+  private def rediagonalizeGram(basis: DenseMatrix[Double],
+                                s: DenseVector[Double]
+  ): (DenseMatrix[Double], DenseVector[Double]) = {
+    val l = basis * breeze.linalg.diag(breeze.numerics.sqrt(s)) // basis(*, ::) * breeze.numerics.sqrt(s)
+    val gram = l.t * l
+    val svd = breeze.linalg.svd(gram)
+    val newBasis =
+      l * svd.U * breeze.linalg.diag(
+        1.0 / breeze.numerics.sqrt(svd.S)
+      ) // l * (svd.U(*, ::) * (1.0 / breeze.numerics.sqrt(svd.S)))
+    (newBasis, svd.S)
   }
 
 }
